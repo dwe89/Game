@@ -141,6 +141,12 @@
     return { left: lerp(.39, .08, t), right: lerp(.61, .92, t) };
   }
 
+  function enemyPosition(enemy) {
+    if (enemy.boss) return { x: enemy.x, y: enemy.y };
+    const bounds = roadBoundsAt(enemy.y);
+    return { x: lerp(bounds.left, bounds.right, enemy.lane), y: enemy.y };
+  }
+
   function formationPositions() {
     const visible = Math.min(squadCount, 36);
     const columns = visible <= 1 ? 1 : visible <= 4 ? 2 : visible <= 9 ? 3 : visible <= 20 ? 4 : 6;
@@ -164,15 +170,15 @@
     else if (wave >= 3 && roll > .63) kind = 'crawler';
     else if (wave >= 2 && roll > .48) kind = 'stalker';
     const type = enemyTypes[kind];
-    const lane = Math.round(random(1, 8)) / 10;
-    enemies.push({ kind, x: clamp(lane + random(-.035, .035), .12, .88), y: -.08, hp: type.hp + Math.floor(wave / 5), maxHp: type.hp + Math.floor(wave / 5), speed: type.speed * (1 + wave * .055), phase: random(0, TAU), hit: 0, boss: false });
+    const lane = clamp(Math.round(random(1, 8)) / 10 + random(-.035, .035), .12, .88);
+    enemies.push({ kind, lane, x: .5, y: .14, hp: type.hp + Math.floor(wave / 5), maxHp: type.hp + Math.floor(wave / 5), speed: type.speed * (1 + wave * .055), phase: random(0, TAU), hit: 0, boss: false });
   }
 
   function spawnBoss() {
     if (bossSpawned || bossActive) return;
     bossSpawned = true; bossActive = true;
     const hp = enemyTypes.boss.hp + wave * 24;
-    enemies.push({ kind: 'boss', x: .5, y: .04, hp, maxHp: hp, speed: enemyTypes.boss.speed, phase: 0, hit: 0, boss: true });
+    enemies.push({ kind: 'boss', x: .5, y: .14, hp, maxHp: hp, speed: enemyTypes.boss.speed, phase: 0, hit: 0, boss: true });
     announceWave();
     beep(65, .6, 'sawtooth', .05);
   }
@@ -238,6 +244,7 @@
   }
 
   function hitEnemy(enemy, bullet) {
+    if (!enemy || !enemyTypes[enemy.kind] || !bullet) return;
     enemy.hp -= bullet.damage;
     enemy.hit = .12;
     burst(bullet.x, bullet.y, enemyTypes[enemy.kind].color, enemy.boss ? 5 : 3, .12);
@@ -247,20 +254,22 @@
 
   function destroyEnemy(enemy) {
     const type = enemyTypes[enemy.kind];
+    if (!type) return;
     const index = enemies.indexOf(enemy);
     if (index !== -1) enemies.splice(index, 1);
     combo = comboTimer > 0 ? combo + 1 : 1;
     comboTimer = 2;
     const earned = type.score * Math.min(5, combo);
     score += earned;
-    burst(enemy.x, enemy.y, type.color, enemy.boss ? 48 : 14, enemy.boss ? .75 : .34);
-    floaters.push({ x: enemy.x, y: enemy.y, text: `+${earned}`, color: enemy.boss ? '#ffd36b' : '#fff', life: 1, vy: -.08 });
-    if (combo > 1) floaters.push({ x: enemy.x, y: enemy.y - .04, text: `${Math.min(5, combo)}× COMBO`, color: '#59e5ff', life: 1, vy: -.05 });
+    const position = enemyPosition(enemy);
+    burst(position.x, position.y, type.color, enemy.boss ? 48 : 14, enemy.boss ? .75 : .34);
+    floaters.push({ x: position.x, y: position.y, text: `+${earned}`, color: enemy.boss ? '#ffd36b' : '#fff', life: 1, vy: -.08 });
+    if (combo > 1) floaters.push({ x: position.x, y: position.y - .04, text: `${Math.min(5, combo)}× COMBO`, color: '#59e5ff', life: 1, vy: -.05 });
     shake = Math.min(16, shake + (enemy.boss ? 14 : 2));
     beep(enemy.boss ? 58 : 175, enemy.boss ? .45 : .08, enemy.boss ? 'sawtooth' : 'square', .04);
     if (enemy.boss) { bossActive = false; core = clamp(core + 20, 0, 100); showToast('GIANT DOWN  ·  +20% CORE'); nextWave(); }
     else if (waveKills++ >= waveTarget - 1 && !bossActive) nextWave();
-    if (!enemy.boss && Math.random() < .08) powerups.push({ x: enemy.x, y: enemy.y, type: Math.random() < .65 ? 'medkit' : 'rifle', life: 8, spin: 0 });
+    if (!enemy.boss && Math.random() < .08) powerups.push({ x: position.x, y: position.y, type: Math.random() < .65 ? 'medkit' : 'rifle', life: 8, spin: 0 });
     updateHud();
   }
 
@@ -326,23 +335,27 @@
       if (gate.y > player.y - .09) { applyGate(player.x < .5 ? gate.left : gate.right); gates.splice(i, 1); }
     }
 
+    for (let i = enemies.length - 1; i >= 0; i--) {
+      const enemy = enemies[i];
+      enemy.phase += dt * 3; enemy.hit = Math.max(0, enemy.hit - dt);
+      enemy.y += enemy.speed * dt / height;
+      if (!enemy.boss) enemy.lane = clamp(enemy.lane + Math.sin(enemy.phase) * dt * .009, .08, .92);
+      if (enemy.boss && enemy.y > .49) { enemies.splice(i, 1); bossActive = false; loseSquad(Math.max(4, Math.ceil(squadCount * .3)), 'GIANT BREAKTHROUGH'); nextWave(); }
+      else if (!enemy.boss && enemy.y > player.y - .02) { enemies.splice(i, 1); loseSquad(enemyTypes[enemy.kind].damage, 'ZOMBIES HIT'); }
+    }
+
     for (let i = bullets.length - 1; i >= 0; i--) {
       const bullet = bullets[i]; bullet.trail.push({ x: bullet.x, y: bullet.y }); if (bullet.trail.length > 7) bullet.trail.shift();
       bullet.x += bullet.vx * dt; bullet.y += bullet.vy * dt; bullet.life -= dt;
       let hit = false;
-      for (const enemy of enemies) {
-        const hitRadius = enemy.boss ? .09 : .027;
-        if (Math.hypot(bullet.x - enemy.x, bullet.y - enemy.y) < hitRadius) { hitEnemy(enemy, bullet); hit = true; break; }
+      for (let enemyIndex = enemies.length - 1; enemyIndex >= 0; enemyIndex--) {
+        const enemy = enemies[enemyIndex];
+        if (!enemy || !enemyTypes[enemy.kind]) continue;
+        const position = enemyPosition(enemy);
+        const hitRadius = enemy.boss ? .095 : clamp(.018 + enemy.y * .022, .022, .043);
+        if (Math.hypot(bullet.x - position.x, bullet.y - position.y) < hitRadius) { hitEnemy(enemy, bullet); hit = true; break; }
       }
       if (hit || bullet.life <= 0 || bullet.x < -.1 || bullet.x > 1.1 || bullet.y < -.1 || bullet.y > 1.1) bullets.splice(i, 1);
-    }
-
-    for (let i = enemies.length - 1; i >= 0; i--) {
-      const enemy = enemies[i]; enemy.phase += dt * 3; enemy.hit = Math.max(0, enemy.hit - dt);
-      enemy.y += enemy.speed * dt / height;
-      if (!enemy.boss) enemy.x += Math.sin(enemy.phase) * dt * .018;
-      if (enemy.boss && enemy.y > .49) { enemies.splice(i, 1); bossActive = false; loseSquad(Math.max(4, Math.ceil(squadCount * .3)), 'GIANT BREAKTHROUGH'); nextWave(); }
-      else if (!enemy.boss && enemy.y > player.y - .02) { enemies.splice(i, 1); loseSquad(enemyTypes[enemy.kind].damage, 'ZOMBIES HIT'); }
     }
 
     for (let i = powerups.length - 1; i >= 0; i--) {
@@ -424,7 +437,11 @@
   function drawEnemies() {
     const cell = art.zombies.naturalWidth ? art.zombies.naturalWidth / 2 : 0;
     for (const enemy of enemies) {
-      const type = enemyTypes[enemy.kind]; const x = screenX(enemy.x); const y = screenY(enemy.y) + (enemy.boss ? 0 : Math.sin(enemy.phase * 2) * 2); const size = enemy.boss ? Math.min(height * .3, Math.max(160, width * .56)) : Math.min(height * .18, Math.max(52, width * type.size));
+      const type = enemyTypes[enemy.kind]; if (!type) continue;
+      const position = enemyPosition(enemy);
+      const x = screenX(position.x); const y = screenY(position.y) + (enemy.boss ? 0 : Math.sin(enemy.phase * 2) * 2);
+      const progress = clamp((enemy.y - .1) / .78, 0, 1);
+      const size = enemy.boss ? Math.min(height * .3, Math.max(160, width * .56)) : Math.min(height * .2, Math.max(28, width * type.size * (.45 + progress * .75)));
       ctx.save(); ctx.globalAlpha = enemy.hit > 0 ? .68 : 1; ctx.fillStyle = 'rgba(0,0,0,.42)'; ctx.beginPath(); ctx.ellipse(x, y + size * .32, size * .29, size * .1, 0, 0, TAU); ctx.fill();
       const glow = ctx.createRadialGradient(x, y, 0, x, y, size * .75); glow.addColorStop(0, `${type.color}42`); glow.addColorStop(1, `${type.color}00`); ctx.fillStyle = glow; ctx.beginPath(); ctx.arc(x, y, size * .75, 0, TAU); ctx.fill();
       ctx.translate(x, y); ctx.rotate(enemy.boss ? Math.sin(elapsed * .8) * .015 : Math.sin(enemy.phase * .7) * .04);
