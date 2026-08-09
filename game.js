@@ -363,7 +363,14 @@
   }
 
   function drawBackdrop() {
-    if (art.road.complete && art.road.naturalWidth) ctx.drawImage(art.road, 0, 0, width, height);
+    if (art.road.complete && art.road.naturalWidth) {
+      const imageRatio = art.road.naturalWidth / art.road.naturalHeight;
+      const canvasRatio = width / height;
+      let drawWidth = width; let drawHeight = height; let offsetX = 0; let offsetY = 0;
+      if (canvasRatio > imageRatio) { drawHeight = width / imageRatio; offsetY = (height - drawHeight) / 2; }
+      else { drawWidth = height * imageRatio; offsetX = (width - drawWidth) / 2; }
+      ctx.drawImage(art.road, offsetX, offsetY, drawWidth, drawHeight);
+    }
     else { const gradient = ctx.createLinearGradient(0, 0, 0, height); gradient.addColorStop(0, '#312b37'); gradient.addColorStop(1, '#080c17'); ctx.fillStyle = gradient; ctx.fillRect(0, 0, width, height); }
     const shade = ctx.createLinearGradient(0, 0, 0, height); shade.addColorStop(0, 'rgba(4,7,18,.23)'); shade.addColorStop(.7, 'rgba(4,7,18,.04)'); shade.addColorStop(1, 'rgba(4,7,18,.42)'); ctx.fillStyle = shade; ctx.fillRect(0, 0, width, height);
     for (const star of stars) { ctx.fillStyle = `rgba(255,220,170,${star.a * .18})`; ctx.beginPath(); ctx.arc(star.x * width, star.y * height, star.r, 0, TAU); ctx.fill(); }
